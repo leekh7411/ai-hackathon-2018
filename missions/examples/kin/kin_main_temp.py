@@ -171,7 +171,15 @@ if __name__ == '__main__':
         hist = model.fit(dataset.queries, dataset.labels, epochs=config.epochs, batch_size=10)
         # DONOTCHANGE (You can decide how often you want to save the model)
         # nsml.save(1)
-        model.save_weights(DATASET_PATH + 'model.h5')
+        # model.save_weights(DATASET_PATH + 'model.h5')
+
+        tf.keras.models.save_model(
+            model,
+            DATASET_PATH+'model.h5',
+            overwrite=True,
+            include_optimizer=True
+        )
+
         """
         for epoch in range(config.epochs):
             avg_loss = 0.0
@@ -204,7 +212,13 @@ if __name__ == '__main__':
     # [(0.3, 0), (0.7, 1), ... ]
     elif config.mode == 'test_local':
         print("Local testing....")
-        model.load_weights(DATASET_PATH + 'model.h5')
+        print("..................Loading Model.......")
+        tf.keras.models.load_model(
+            DATASET_PATH,
+            custom_objects=None,
+            compile=True
+        )
+        print(".......Finish!")
         with open(os.path.join(DATASET_PATH, 'train/train_data'), 'rt', encoding='utf-8') as f:
             queries = f.readlines()
         res = []
