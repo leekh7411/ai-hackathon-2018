@@ -173,33 +173,6 @@ if __name__ == '__main__':
         # DONOTCHANGE (You can decide how often you want to save the model)
         nsml.save(1)
 
-        """
-        for epoch in range(config.epochs):
-            avg_loss = 0.0
-            for i, (data, labels) in enumerate(_batch_loader(dataset, config.batch)):
-                # train here and print batch loss
-                print("length of train data     : ", len(data)  , " X ", len(data[0])   )
-                print("length of train labels   : ", len(labels), " X ", len(labels[0]) )
-                for x_train,y_train in zip(data,labels):
-                    x_train = np.array(x_train)
-                    y_train = np.array(y_train)
-                    x_train = np.reshape(x_train,[1,len(x_train)])
-                    y_train = np.reshape(y_train,[1,len(y_train)])
-    
-                    #print(x_train)
-                    #print(y_train)
-    
-                    hist = model.fit(x_train, y_train, epochs=1)  # default batch
-    
-    
-            # print epoch loss and report nsml an save nsml model
-            print("epoch:",epoch,"------------------------------------------------------")
-            '''nsml.report(summary=True, scope=locals(), epoch=epoch, epoch_total=config.epochs,
-                        train__loss=float(avg_loss / one_batch_size), step=epoch)
-            '''
-    
-            #nsml.save(epoch) REMOVE#
-        """
     # 로컬 테스트 모드일때 사용합니다
     # 결과가 아래와 같이 나온다면, nsml submit을 통해서 제출할 수 있습니다.
     # [(0.3, 0), (0.7, 1), ... ]
