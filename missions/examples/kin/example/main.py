@@ -26,11 +26,9 @@ import os
 
 import numpy as np
 import tensorflow as tf
-
 import nsml
 from nsml import DATASET_PATH, HAS_DATASET, IS_ON_NSML
 from dataset import KinQueryDataset, preprocess
-
 
 # DONOTCHANGE: They are reserved for nsml
 # This is for nsml leaderboard
@@ -118,14 +116,14 @@ if __name__ == '__main__':
         DATASET_PATH = '../sample_data/kin/'
 
     # 모델의 specification
-    input_size = config.embedding*config.strmaxlen
+    input_size = config.embedding*config.strmaxlen # 8 x 400
     output_size = 1
     hidden_layer_size = 200
     learning_rate = 0.001
     character_size = 251
 
-    x = tf.placeholder(tf.int32, [None, config.strmaxlen])
-    y_ = tf.placeholder(tf.float32, [None, output_size])
+    x = tf.placeholder(tf.int32, [None, config.strmaxlen]) # 400
+    y_ = tf.placeholder(tf.float32, [None, output_size]) # 1
     # 임베딩
     char_embedding = tf.get_variable('char_embedding', [character_size, config.embedding])
     embedded = tf.nn.embedding_lookup(char_embedding, x)
