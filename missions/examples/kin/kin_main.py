@@ -110,28 +110,121 @@ if __name__ == '__main__':
     args.add_argument('--strmaxlen', type=int, default=400)
     args.add_argument('--embedding', type=int, default=8)
     args.add_argument('--threshold', type=float, default=0.5)
+    args.add_argument('--dropout',type=float,default=0.7)
     config = args.parse_args()
 
     if not HAS_DATASET and not IS_ON_NSML:  # It is not running on nsml
         DATASET_PATH = './sample_data/kin/'
 
     # 모델의 specification
+    # ====================================== MODEL ===========================================#
+    #                           Text Classification using CNN
+
     L1_INPUT        = config.embedding * config.strmaxlen # 8 x 400
     H1_size         = 512
     H2_size         = 256
     L3_OUTPUT       = 1
     learning_rate   = 0.001
     character_size  = 251
+    dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
+    l2_loss = tf.constant(0.0)
 
-    x = tf.placeholder(tf.int32, [None, config.strmaxlen]) # 400
-    y_ = tf.placeholder(tf.float32, [None, L3_OUTPUT]) # 1
-    # 임베딩
-    char_embedding = tf.get_variable('char_embedding', [character_size, config.embedding])
-    embedded = tf.nn.embedding_lookup(char_embedding, x)
+    # Input & Output layer
+    # 'x' is sentence input layer(size 400). sentence data is a 400 max_len vector
+    # and char2vec model return 'int32' vector
+    x = tf.placeholder(tf.int32, [None, config.strmaxlen],name="input_x") # 400
 
+    # 'y' is output layer.
+    # we will classify as binary (0 or 1)
+    # so output size is one(1)
+    y_ = tf.placeholder(tf.float32, [None, L3_OUTPUT],name="output_y") # 1
+
+    # Embedding Layer
+    # _parm: char_size = 251(default)
+    # _parm: config.embedding = 8(default)
+    # char_embedding is tf.Variable size[251,8]
+    with tf.name_scope('embedding'):
+        embedding_W = tf.Variable(
+            tf.random_uniform([character_size,config.embedding],-1.0,1.0),
+            name="Embedding_W"
+        )
+
+        # embedded is a embedding neural net which has input as 'char_embedding' & input sentence 'x'
+        embedded = tf.nn.embedding_lookup(embedding_W, x)
+        embedded_expand = tf.expand_dims(embedded,-1)
+
+    # CNN-Clf Layer
+    # create convolution + maxpool layer
+    num_of_filters = 256
+    filter_sizes = [3,3,4,4,5,5]
+    pooled_outputs = []
+
+    # Convolution Layer
+    for filter_size in filter_sizes:
+        with tf.name_scope("conv-maxpool-%s" % filter_size):
+            filter_shape = [filter_size,config.embedding,1,num_of_filters]
+            Conv_W = tf.Variable(tf.truncated_normal(filter_shape,stddev=0.1),name="Conv_W") # Conv's filter?
+            Conv_B = tf.Variable(tf.constant(0.1,shape=[num_of_filters]),name="Conv_B")
+            Conv = tf.nn.conv2d(
+                embedded_expand,
+                Conv_W,
+                strides=[1,1,1,1],
+                padding="VALID",
+                name="Conv"
+            )
+            # Add Bias and Activation Relu
+            h = tf.nn.relu(tf.nn.bias_add(Conv, Conv_B), name="Conv_activation_relu")
+
+            # Max pooling over the outputs
+            pooled = tf.nn.max_pool(
+                h,
+                ksize=[1, config.strmaxlen - filter_size + 1, 1, 1],
+                strides=[1,1,1,1],
+                padding="VALID",
+                name="MaxPool"
+            )
+            pooled_outputs.append(pooled)
+
+    # Combine all the pooled features
+    num_total_filters = num_of_filters * len(filter_sizes) # 1 -> length of filter size
+    h_pool = tf.concat(pooled_outputs,3)
+    h_pool_expand = tf.reshape(h_pool,[-1,num_total_filters])
+
+    # Add Drop out
+    with tf.name_scope("dropout"):
+        h_drop = tf.nn.dropout(h_pool_expand,dropout_keep_prob)
+
+    # Output layer
+    with tf.name_scope("output-layer"):
+        W = tf.get_variable(
+            "W",
+            shape=[num_total_filters, L3_OUTPUT],
+            initializer=tf.contrib.layers.xavier_initializer()
+        )
+
+        B = tf.Variable(tf.constant(0.1,shape=[L3_OUTPUT]),name="B")
+        l2_loss += tf.nn.l2_loss(W)
+        l2_loss += tf.nn.l2_loss(B)
+
+        output = tf.nn.sigmoid(tf.matmul(h_drop,W) + B)
+
+    """
     # layer 1
-    W1 = weight_variable([L1_INPUT, H1_size]) # 3200 X
+    # layer 1 is hidden layer which input 'embedded'
+    # layer 1 : [L1] = [embedded] X [W1] + [B1]
+    #
+    # embedded size : L1_INPUT --> [embedding size 8] X [sentence size 400] = [3200]
+    # [3200] X [Layer1 Output size] = [Layer1's Hidden Layer Weight]
+    # W1 = weight_variable([L1_INPUT, H1_size])
+
+    W1 = tf.Variable(
+        tf.random_uniform([L1_INPUT, H1_size], -1.0, 1.0),
+        name="W1")
+
+    # set Bias of Layer1 as size of Layer1's output
     B1 = bias_variable([H1_size])
+
+    # [8]x[400] embedded ---> flatten by tf.reshape --> [3200]
     L1 = tf.matmul(tf.reshape(embedded, (-1, L1_INPUT)),W1) + B1
 
     # layer 2
@@ -144,13 +237,16 @@ if __name__ == '__main__':
     W3 = weight_variable([H2_size, L3_OUTPUT])
     B3   = bias_variable([L3_OUTPUT])
     output = tf.nn.sigmoid(tf.matmul(L2,W3)+B3)
-
+    """
     # loss와 optimizer
-    binary_cross_entropy = tf.reduce_mean(-(y_ * tf.log(output)) - (1-y_) * tf.log(1-output))
-    train_step = tf.train.AdamOptimizer(learning_rate).minimize(binary_cross_entropy)
+    with tf.name_scope("loss-optimizer"):
+        binary_cross_entropy = tf.reduce_mean(-(y_ * tf.log(output)) - (1-y_) * tf.log(1-output))
+        train_step = tf.train.AdamOptimizer(learning_rate).minimize(binary_cross_entropy)
 
     sess = tf.InteractiveSession()
     tf.global_variables_initializer().run()
+
+    # ========================================================================================#
 
     # DONOTCHANGE: Reserved for nsml
     bind_model(sess=sess, config=config)
@@ -171,7 +267,7 @@ if __name__ == '__main__':
             avg_loss = 0.0
             for i, (data, labels) in enumerate(_batch_loader(dataset, config.batch)):
                 _, loss = sess.run([train_step, binary_cross_entropy],
-                                   feed_dict={x: data, y_: labels})
+                                   feed_dict={x: data, y_: labels,dropout_keep_prob: config.dropout})
                 print('Batch : ', i + 1, '/', one_batch_size,
                       ', BCE in this minibatch: ', float(loss))
                 avg_loss += float(loss)
