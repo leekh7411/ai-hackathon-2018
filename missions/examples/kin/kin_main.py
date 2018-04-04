@@ -29,7 +29,7 @@ import tensorflow as tf
 import nsml
 from nsml import DATASET_PATH, HAS_DATASET, IS_ON_NSML
 from kin_dataset import KinQueryDataset, preprocess
-
+from nsml import GPU_NUM
 # DONOTCHANGE: They are reserved for nsml
 # This is for nsml leaderboard
 def bind_model(sess, config):
@@ -62,7 +62,7 @@ def bind_model(sess, config):
         # dataset.py에서 작성한 preprocess 함수를 호출하여, 문자열을 벡터로 변환합니다
         preprocessed_data = preprocess(raw_data, config.strmaxlen)
         # 저장한 모델에 입력값을 넣고 prediction 결과를 리턴받습니다
-        pred = sess.run(output, feed_dict={x: preprocessed_data})
+        pred = sess.run(output, feed_dict={x: preprocessed_data, dropout_keep_prob: config.dropout})
         clipped = np.array(pred > config.threshold, dtype=np.int)
         # DONOTCHANGE: They are reserved for nsml
         # 리턴 결과는 [(확률, 0 or 1)] 의 형태로 보내야만 리더보드에 올릴 수 있습니다. 리더보드 결과에 확률의 값은 영향을 미치지 않습니다
@@ -105,12 +105,12 @@ if __name__ == '__main__':
 
     # User options
     args.add_argument('--output', type=int, default=1)
-    args.add_argument('--epochs', type=int, default=100)
+    args.add_argument('--epochs', type=int, default=200)
     args.add_argument('--batch', type=int, default=2000)
     args.add_argument('--strmaxlen', type=int, default=400)
     args.add_argument('--embedding', type=int, default=8)
     args.add_argument('--threshold', type=float, default=0.5)
-    args.add_argument('--dropout',type=float,default=0.7)
+    args.add_argument('--dropout',type=float,default=0.8)
     config = args.parse_args()
 
     if not HAS_DATASET and not IS_ON_NSML:  # It is not running on nsml
@@ -153,15 +153,15 @@ if __name__ == '__main__':
         embedded = tf.nn.embedding_lookup(embedding_W, x)
         embedded_expand = tf.expand_dims(embedded,-1)
 
-    # CNN-Clf Layer
+    # CNN-Clf Layer1
     # create convolution + maxpool layer
     num_of_filters = 256
-    filter_sizes = [3,3,4,4,5,5]
+    filter_sizes = [2,2,3,3,4,4,5,5]
     pooled_outputs = []
 
     # Convolution Layer
     for filter_size in filter_sizes:
-        with tf.name_scope("conv-maxpool-%s" % filter_size):
+        with tf.name_scope("conv-maxpool-1-%s" % filter_size):
             filter_shape = [filter_size,config.embedding,1,num_of_filters]
             Conv_W = tf.Variable(tf.truncated_normal(filter_shape,stddev=0.1),name="Conv_W") # Conv's filter?
             Conv_B = tf.Variable(tf.constant(0.1,shape=[num_of_filters]),name="Conv_B")
@@ -191,11 +191,59 @@ if __name__ == '__main__':
     h_pool_expand = tf.reshape(h_pool,[-1,num_total_filters])
 
     # Add Drop out
+
     with tf.name_scope("dropout"):
         h_drop = tf.nn.dropout(h_pool_expand,dropout_keep_prob)
 
+
+    #------------------------------------------------------------------------------------------------
+    '''
+    # CNN-Clf Layer2
+    # create convolution + maxpool layer
+    filter2_sizes = [2, 3, 4, 5]
+    pooled2_outputs = []
+    num_of_filters_2 = num_of_filters * len(filter_sizes)
+
+    # Convolution Layer 2
+    for filter_size in filter2_sizes:
+        with tf.name_scope("conv-maxpool-2-%s" % filter_size):
+            filter_shape = [filter_size , 1, 1, num_of_filters_2]
+            Conv_W2 = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="Conv_W2")  # Conv's filter?
+            Conv_B2 = tf.Variable(tf.constant(0.1, shape=[num_of_filters_2]), name="Conv_B2")
+            Conv_2 = tf.nn.conv2d(
+                h_drop,
+                Conv_W2,
+                strides=[1, 1, 1, 1],
+                padding="VALID",
+                name="Conv"
+            )
+            # Add Bias and Activation Relu
+            h2 = tf.nn.relu(tf.nn.bias_add(Conv_2, Conv_B2), name="Conv2_activation_relu")
+
+            # Max pooling over the outputs
+            pooled2 = tf.nn.max_pool(
+                h2,
+                ksize=[1, config.strmaxlen - filter_size + 1, 1, 1],
+                strides=[1, 1, 1, 1],
+                padding="VALID",
+                name="MaxPool"
+            )
+            pooled2_outputs.append(pooled2)
+
+    # Combine all the pooled features
+    num_total_filters2 = num_of_filters_2 * len(filter2_sizes)  # 1 -> length of filter size
+    h_pool2 = tf.concat(pooled2_outputs, 3)
+    h_pool2_expand = tf.reshape(h_pool, [-1, num_total_filters2])
+
+    # Add Drop out
+    with tf.name_scope("dropout2"):
+        h2_drop = tf.nn.dropout(h_pool2_expand, dropout_keep_prob)
+    '''
+    #------------------------------------------------------------------------------------------------
+
+
     # Output layer
-    with tf.name_scope("output-layer"):
+    with tf.name_scope("output-layer2"):
         W = tf.get_variable(
             "W",
             shape=[num_total_filters, L3_OUTPUT],
@@ -240,7 +288,8 @@ if __name__ == '__main__':
     """
     # loss와 optimizer
     with tf.name_scope("loss-optimizer"):
-        binary_cross_entropy = tf.reduce_mean(-(y_ * tf.log(output)) - (1-y_) * tf.log(1-output))
+        binary_cross_entropy = tf.reduce_mean(-(y_ * tf.log(tf.clip_by_value(output,1e-10,1.0))) - (1-y_) * tf.log(tf.clip_by_value(1-output,1e-10,1.0)))
+        #binary_cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=output,labels=y_))
         train_step = tf.train.AdamOptimizer(learning_rate).minimize(binary_cross_entropy)
 
     sess = tf.InteractiveSession()
@@ -250,6 +299,7 @@ if __name__ == '__main__':
 
     # DONOTCHANGE: Reserved for nsml
     bind_model(sess=sess, config=config)
+
 
     # DONOTCHANGE: Reserved for nsml
     if config.pause:
