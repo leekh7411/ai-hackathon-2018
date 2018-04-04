@@ -26,6 +26,7 @@ import os
 import numpy as np
 
 from kin_kor_char_parser import decompose_str_as_one_hot
+#LOCAL_DATASET_PATH = './sample_data/kin/'
 
 
 class KinQueryDataset:
@@ -45,6 +46,7 @@ class KinQueryDataset:
         # 지식인 데이터를 읽고 preprocess까지 진행합니다
         with open(queries_path, 'rt', encoding='utf8') as f:
             self.queries = preprocess(f.readlines(), max_length)
+
         # 지식인 레이블을 읽고 preprocess까지 진행합니다.
         with open(labels_path) as f:
             self.labels = np.array([[np.float32(x)] for x in f.readlines()])
@@ -64,6 +66,32 @@ class KinQueryDataset:
         """
         return self.queries[idx], self.labels[idx]
 
+
+def preprocess2(data: list, max_length: int):
+    """
+     입력을 받아서 딥러닝 모델이 학습 가능한 포맷으로 변경하는 함수입니다.
+     기본 제공 알고리즘은 char2vec이며, 기본 모델이 MLP이기 때문에, 입력 값의 크기를 모두 고정한 벡터를 리턴합니다.
+     문자열의 길이가 고정값보다 길면 긴 부분을 제거하고, 짧으면 0으로 채웁니다.
+
+    :param data: 문자열 리스트 ([문자열1, 문자열2, ...])
+    :param max_length: 문자열의 최대 길이
+    :return: 벡터 리스트 ([[0, 1, 5, 6], [5, 4, 10, 200], ...]) max_length가 4일 때
+    """
+    vectorized_data = [decompose_str_as_one_hot(datum, warning=False) for datum in data]
+    zero_padding = np.zeros((len(data), max_length), dtype=np.float32)
+    for idx, seq in enumerate(vectorized_data):
+        length = len(seq)
+        if length >= max_length:
+            length = max_length
+            zero_padding[idx, :length] = np.array(seq)[:length]
+        else:
+            zero_padding[idx, :length] = np.array(seq)
+        #print(zero_padding[idx])
+        var = np.var(zero_padding[idx])
+        avg = np.average(zero_padding[idx])
+        zero_padding[idx] = ((zero_padding[idx] - avg)/ var)
+        #print(zero_padding[idx])
+    return zero_padding
 
 def preprocess(data: list, max_length: int):
     """

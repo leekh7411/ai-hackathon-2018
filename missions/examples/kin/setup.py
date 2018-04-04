@@ -19,13 +19,10 @@ CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFT
 OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
-
 from distutils.core import setup
 setup(
     name='nsml LSTM kin query',
     version='1.0',
     description='',
-    install_requires =[
-        'keras','sklearn','h5py'
-    ]
+    install_requires = ['h5py','keras']
 )
