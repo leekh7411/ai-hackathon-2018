@@ -62,7 +62,7 @@ def bind_model(sess, config):
         # dataset.py에서 작성한 preprocess 함수를 호출하여, 문자열을 벡터로 변환합니다
         preprocessed_data = preprocess(raw_data, config.strmaxlen)
         # 저장한 모델에 입력값을 넣고 prediction 결과를 리턴받습니다
-        pred = sess.run(output, feed_dict={x: preprocessed_data, dropout_keep_prob: config.dropout})
+        pred = sess.run(output, feed_dict={x: preprocessed_data})
         clipped = np.array(pred > config.threshold, dtype=np.int)
         # DONOTCHANGE: They are reserved for nsml
         # 리턴 결과는 [(확률, 0 or 1)] 의 형태로 보내야만 리더보드에 올릴 수 있습니다. 리더보드 결과에 확률의 값은 영향을 미치지 않습니다
@@ -95,6 +95,87 @@ def bias_variable(shape):
     initial = tf.constant(0.1, shape=shape)
     return tf.Variable(initial)
 
+def textCNNModel(_filter_sizes, _num_filters, _embedding_size,drop_out,model_index):
+    # 모델의 specification
+    # ====================================== MODEL ===========================================#
+    #                           Text Classification using CNN
+
+    l2_loss = tf.constant(0.0)
+
+    # Embedding Layer
+    # _parm: char_size = 251(default)
+    # _parm: config.embedding = 8(default)
+    # char_embedding is tf.Variable size[251,8]
+    with tf.name_scope("embedding"+ "-%s" % model_index):
+        embedding_W = tf.Variable(
+            tf.random_uniform([character_size, _embedding_size], -1.0, 1.0),
+            name="Embedding_W"+ "-%s" % model_index
+        )
+
+        # embedded is a embedding neural net which has input as 'char_embedding' & input sentence 'x'
+        embedded = tf.nn.embedding_lookup(embedding_W, x)
+        embedded_expand = tf.expand_dims(embedded, -1)
+        print(embedded_expand)
+
+    # CNN-Clf Layer1
+    # create convolution + maxpool layer
+    num_of_filters = _num_filters # 256
+    filter_sizes = _filter_sizes  # [2,3,4,5]
+    pooled_outputs = []
+
+    # Convolution Layer
+    for filter_size in filter_sizes:
+        filter_name = "conv-maxpool-1-%s" % filter_size
+        with tf.name_scope(filter_name + "-%s" % model_index):
+            filter_shape = [filter_size, _embedding_size, 1, num_of_filters]
+            Conv_W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="Conv_W-%s" % model_index)  # Conv's filter?
+            Conv_B = tf.Variable(tf.constant(0.1, shape=[num_of_filters]), name="Conv_B-%s" % model_index)
+            Conv = tf.nn.conv2d(
+                embedded_expand,
+                Conv_W,
+                strides=[1, 1, 1, 1],
+                padding="VALID",
+                name="Conv-%s" % model_index
+            )
+            # Add Bias and Activation Relu
+            h = tf.nn.relu(tf.nn.bias_add(Conv, Conv_B), name="Conv_activation_relu-%s" % model_index)
+
+            # Max pooling over the outputs
+            pooled = tf.nn.max_pool(
+                h,
+                ksize=[1, config.strmaxlen - filter_size + 1, 1, 1],
+                strides=[1, 1, 1, 1],
+                padding="VALID",
+                name="MaxPool" + "-%s" % model_index
+            )
+            pooled_outputs.append(pooled)
+
+    # Combine all the pooled features
+    num_total_filters = num_of_filters * len(filter_sizes)  # 1 -> length of filter size
+    h_pool = tf.concat(pooled_outputs, 3)
+    h_pool_expand = tf.reshape(h_pool, [-1, num_total_filters])
+
+    # Add Drop out
+
+    with tf.name_scope("dropout"+ "-%s" % model_index):
+        h_drop = tf.nn.dropout(h_pool_expand, drop_out)
+
+    # Output layer
+    with tf.name_scope("output-layer"+ "-%s" % model_index):
+        W2 = tf.get_variable(
+            "W-out"+ "-%s" % model_index,
+            shape=[num_total_filters, L3_OUTPUT],
+            initializer=tf.contrib.layers.xavier_initializer()
+        )
+
+        B2 = tf.Variable(tf.constant(0.1, shape=[L3_OUTPUT]), name="B-out"+ "-%s" % model_index)
+        l2_loss += tf.nn.l2_loss(W2)
+        l2_loss += tf.nn.l2_loss(B2)
+
+        output = tf.nn.sigmoid(tf.matmul(h_drop, W2) + B2)
+        print(output)
+
+    return output
 
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
@@ -105,191 +186,67 @@ if __name__ == '__main__':
 
     # User options
     args.add_argument('--output', type=int, default=1)
-    args.add_argument('--epochs', type=int, default=200)
+    args.add_argument('--epochs', type=int, default=500)
     args.add_argument('--batch', type=int, default=2000)
     args.add_argument('--strmaxlen', type=int, default=400)
-    args.add_argument('--embedding', type=int, default=8)
+    args.add_argument('--embedding', type=int, default=16)
     args.add_argument('--threshold', type=float, default=0.5)
-    args.add_argument('--dropout',type=float,default=0.8)
+    args.add_argument('--lr',type=float,default=0.001)
     config = args.parse_args()
 
     if not HAS_DATASET and not IS_ON_NSML:  # It is not running on nsml
         DATASET_PATH = './sample_data/kin/'
 
-    # 모델의 specification
-    # ====================================== MODEL ===========================================#
-    #                           Text Classification using CNN
-
-    L1_INPUT        = config.embedding * config.strmaxlen # 8 x 400
-    H1_size         = 512
-    H2_size         = 256
-    L3_OUTPUT       = 1
-    learning_rate   = 0.001
-    character_size  = 251
-    dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
-    l2_loss = tf.constant(0.0)
+    L1_INPUT = config.embedding * config.strmaxlen  # 8 x 400
+    H1_size = 1024
+    H2_size = 256
+    L3_OUTPUT = 5
+    FIN_OUTPUT = 1
+    learning_rate = config.lr
+    character_size = 251
 
     # Input & Output layer
     # 'x' is sentence input layer(size 400). sentence data is a 400 max_len vector
     # and char2vec model return 'int32' vector
-    x = tf.placeholder(tf.int32, [None, config.strmaxlen],name="input_x") # 400
+    x = tf.placeholder(tf.int32, [None, config.strmaxlen], name="input_x")  # 400
 
     # 'y' is output layer.
     # we will classify as binary (0 or 1)
     # so output size is one(1)
-    y_ = tf.placeholder(tf.float32, [None, L3_OUTPUT],name="output_y") # 1
+    y_ = tf.placeholder(tf.float32, [None, FIN_OUTPUT], name="output_y")  # 1
 
-    # Embedding Layer
-    # _parm: char_size = 251(default)
-    # _parm: config.embedding = 8(default)
-    # char_embedding is tf.Variable size[251,8]
-    with tf.name_scope('embedding'):
-        embedding_W = tf.Variable(
-            tf.random_uniform([character_size,config.embedding],-1.0,1.0),
-            name="Embedding_W"
-        )
+    # combine all output layers
+    outputs = []
+    outputs.append(textCNNModel(_num_filters=64, _filter_sizes=[2, 3, 4, 5, 6, 3, 2], _embedding_size=18, drop_out=0.7,model_index=0))
+    outputs.append(textCNNModel(_num_filters=64, _filter_sizes=[2, 3, 3, 4, 4, 3, 2], _embedding_size=18, drop_out=0.7,model_index=1))
+    #outputs.append(textCNNModel(_num_filters=64, _filter_sizes=[4, 4, 4, 4], _embedding_size=8, drop_out=0.7,model_index=2))
+    #outputs.append(textCNNModel(_num_filters=64, _filter_sizes=[5, 5, 5, 5], _embedding_size=8, drop_out=0.7,model_index=3))
+    #outputs.append(textCNNModel(_num_filters=256, _filter_sizes=[2, 3, 4, 5], _embedding_size=16, drop_out=0.5,model_index=4))
+    #outputs.append(textCNNModel(_num_filters=64, _filter_sizes=[3, 4, 5, 6], _embedding_size=16, drop_out=0.7,model_index=5))
+    #outputs.append(textCNNModel(_num_filters=64, _filter_sizes=[4, 5, 6, 7], _embedding_size=16, drop_out=0.7,model_index=6))
 
-        # embedded is a embedding neural net which has input as 'char_embedding' & input sentence 'x'
-        embedded = tf.nn.embedding_lookup(embedding_W, x)
-        embedded_expand = tf.expand_dims(embedded,-1)
-
-    # CNN-Clf Layer1
-    # create convolution + maxpool layer
-    num_of_filters = 256
-    filter_sizes = [2,2,3,3,4,4,5,5]
-    pooled_outputs = []
-
-    # Convolution Layer
-    for filter_size in filter_sizes:
-        with tf.name_scope("conv-maxpool-1-%s" % filter_size):
-            filter_shape = [filter_size,config.embedding,1,num_of_filters]
-            Conv_W = tf.Variable(tf.truncated_normal(filter_shape,stddev=0.1),name="Conv_W") # Conv's filter?
-            Conv_B = tf.Variable(tf.constant(0.1,shape=[num_of_filters]),name="Conv_B")
-            Conv = tf.nn.conv2d(
-                embedded_expand,
-                Conv_W,
-                strides=[1,1,1,1],
-                padding="VALID",
-                name="Conv"
-            )
-            # Add Bias and Activation Relu
-            h = tf.nn.relu(tf.nn.bias_add(Conv, Conv_B), name="Conv_activation_relu")
-
-            # Max pooling over the outputs
-            pooled = tf.nn.max_pool(
-                h,
-                ksize=[1, config.strmaxlen - filter_size + 1, 1, 1],
-                strides=[1,1,1,1],
-                padding="VALID",
-                name="MaxPool"
-            )
-            pooled_outputs.append(pooled)
-
-    # Combine all the pooled features
-    num_total_filters = num_of_filters * len(filter_sizes) # 1 -> length of filter size
-    h_pool = tf.concat(pooled_outputs,3)
-    h_pool_expand = tf.reshape(h_pool,[-1,num_total_filters])
-
-    # Add Drop out
-
-    with tf.name_scope("dropout"):
-        h_drop = tf.nn.dropout(h_pool_expand,dropout_keep_prob)
-
-
-    #------------------------------------------------------------------------------------------------
-    '''
-    # CNN-Clf Layer2
-    # create convolution + maxpool layer
-    filter2_sizes = [2, 3, 4, 5]
-    pooled2_outputs = []
-    num_of_filters_2 = num_of_filters * len(filter_sizes)
-
-    # Convolution Layer 2
-    for filter_size in filter2_sizes:
-        with tf.name_scope("conv-maxpool-2-%s" % filter_size):
-            filter_shape = [filter_size , 1, 1, num_of_filters_2]
-            Conv_W2 = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="Conv_W2")  # Conv's filter?
-            Conv_B2 = tf.Variable(tf.constant(0.1, shape=[num_of_filters_2]), name="Conv_B2")
-            Conv_2 = tf.nn.conv2d(
-                h_drop,
-                Conv_W2,
-                strides=[1, 1, 1, 1],
-                padding="VALID",
-                name="Conv"
-            )
-            # Add Bias and Activation Relu
-            h2 = tf.nn.relu(tf.nn.bias_add(Conv_2, Conv_B2), name="Conv2_activation_relu")
-
-            # Max pooling over the outputs
-            pooled2 = tf.nn.max_pool(
-                h2,
-                ksize=[1, config.strmaxlen - filter_size + 1, 1, 1],
-                strides=[1, 1, 1, 1],
-                padding="VALID",
-                name="MaxPool"
-            )
-            pooled2_outputs.append(pooled2)
-
-    # Combine all the pooled features
-    num_total_filters2 = num_of_filters_2 * len(filter2_sizes)  # 1 -> length of filter size
-    h_pool2 = tf.concat(pooled2_outputs, 3)
-    h_pool2_expand = tf.reshape(h_pool, [-1, num_total_filters2])
-
-    # Add Drop out
-    with tf.name_scope("dropout2"):
-        h2_drop = tf.nn.dropout(h_pool2_expand, dropout_keep_prob)
-    '''
-    #------------------------------------------------------------------------------------------------
-
+    output_concat = tf.concat(outputs,1)
+    total_output_len = len(outputs) * L3_OUTPUT
+    output_expand = tf.reshape(output_concat,[-1,total_output_len])
+    print(output_expand)
 
     # Output layer
-    with tf.name_scope("output-layer2"):
-        W = tf.get_variable(
-            "W",
-            shape=[num_total_filters, L3_OUTPUT],
+    with tf.name_scope("final-output-layer"):
+        W_Fin = tf.get_variable(
+            "W-final-out",
+            shape=[total_output_len, FIN_OUTPUT],
             initializer=tf.contrib.layers.xavier_initializer()
         )
 
-        B = tf.Variable(tf.constant(0.1,shape=[L3_OUTPUT]),name="B")
-        l2_loss += tf.nn.l2_loss(W)
-        l2_loss += tf.nn.l2_loss(B)
+        B_Fin = tf.Variable(tf.constant(0.1, shape=[FIN_OUTPUT]), name="B-final-out")
 
-        output = tf.nn.sigmoid(tf.matmul(h_drop,W) + B)
+        output = tf.nn.sigmoid(tf.matmul(output_expand, W_Fin) + B_Fin)
+        print(output)
 
-    """
-    # layer 1
-    # layer 1 is hidden layer which input 'embedded'
-    # layer 1 : [L1] = [embedded] X [W1] + [B1]
-    #
-    # embedded size : L1_INPUT --> [embedding size 8] X [sentence size 400] = [3200]
-    # [3200] X [Layer1 Output size] = [Layer1's Hidden Layer Weight]
-    # W1 = weight_variable([L1_INPUT, H1_size])
 
-    W1 = tf.Variable(
-        tf.random_uniform([L1_INPUT, H1_size], -1.0, 1.0),
-        name="W1")
-
-    # set Bias of Layer1 as size of Layer1's output
-    B1 = bias_variable([H1_size])
-
-    # [8]x[400] embedded ---> flatten by tf.reshape --> [3200]
-    L1 = tf.matmul(tf.reshape(embedded, (-1, L1_INPUT)),W1) + B1
-
-    # layer 2
-    W2 = weight_variable([H1_size, H2_size])
-    B2 = bias_variable([H2_size])
-    L2 = tf.matmul(L1, W2) + B2
-    L2 = tf.nn.relu(L2)
-
-    # layer 3(out)
-    W3 = weight_variable([H2_size, L3_OUTPUT])
-    B3   = bias_variable([L3_OUTPUT])
-    output = tf.nn.sigmoid(tf.matmul(L2,W3)+B3)
-    """
     # loss와 optimizer
     with tf.name_scope("loss-optimizer"):
         binary_cross_entropy = tf.reduce_mean(-(y_ * tf.log(tf.clip_by_value(output,1e-10,1.0))) - (1-y_) * tf.log(tf.clip_by_value(1-output,1e-10,1.0)))
-        #binary_cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=output,labels=y_))
         train_step = tf.train.AdamOptimizer(learning_rate).minimize(binary_cross_entropy)
 
     sess = tf.InteractiveSession()
@@ -317,7 +274,7 @@ if __name__ == '__main__':
             avg_loss = 0.0
             for i, (data, labels) in enumerate(_batch_loader(dataset, config.batch)):
                 _, loss = sess.run([train_step, binary_cross_entropy],
-                                   feed_dict={x: data, y_: labels,dropout_keep_prob: config.dropout})
+                                   feed_dict={x: data, y_: labels})
                 print('Batch : ', i + 1, '/', one_batch_size,
                       ', BCE in this minibatch: ', float(loss))
                 avg_loss += float(loss)
