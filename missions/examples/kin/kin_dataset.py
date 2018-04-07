@@ -45,7 +45,7 @@ class KinQueryDataset:
 
         # 지식인 데이터를 읽고 preprocess까지 진행합니다
         with open(queries_path, 'rt', encoding='utf8') as f:
-            self.queries = preprocess(f.readlines(), max_length)
+            self.queries1, self.queries2 = preprocess(f.readlines(), max_length)
 
         # 지식인 레이블을 읽고 preprocess까지 진행합니다.
         with open(labels_path) as f:
@@ -56,7 +56,7 @@ class KinQueryDataset:
 
         :return: 전체 데이터의 수를 리턴합니다
         """
-        return len(self.queries)
+        return len(self.labels)
 
     def __getitem__(self, idx):
         """
@@ -64,7 +64,7 @@ class KinQueryDataset:
         :param idx: 필요한 데이터의 인덱스
         :return: 인덱스에 맞는 데이터, 레이블 pair를 리턴합니다
         """
-        return self.queries[idx], self.labels[idx]
+        return self.queries1[idx], self.queries2[idx], self.labels[idx]
 
 
 def preprocess2(data: list, max_length: int):
@@ -103,8 +103,16 @@ def preprocess(data: list, max_length: int):
     :param max_length: 문자열의 최대 길이
     :return: 벡터 리스트 ([[0, 1, 5, 6], [5, 4, 10, 200], ...]) max_length가 4일 때
     """
-    vectorized_data = [decompose_str_as_one_hot(datum, warning=False) for datum in data]
-    zero_padding = np.zeros((len(data), max_length), dtype=np.int32)
+    query1 =[]
+    query2 =[]
+    for d in data:
+        q1,q2 = d.split('\t')
+        query1.append(q1)
+        query2.append(q2.replace('\n',''))
+
+
+    vectorized_data = [decompose_str_as_one_hot(datum, warning=False) for datum in query1]
+    zero_padding = np.zeros((len(query1), max_length), dtype=np.int32)
     for idx, seq in enumerate(vectorized_data):
         length = len(seq)
         if length >= max_length:
@@ -112,4 +120,34 @@ def preprocess(data: list, max_length: int):
             zero_padding[idx, :length] = np.array(seq)[:length]
         else:
             zero_padding[idx, :length] = np.array(seq)
-    return zero_padding
+
+    vectorized_data2 = [decompose_str_as_one_hot(datum, warning=False) for datum in query2]
+    zero_padding2 = np.zeros((len(query2), max_length), dtype=np.int32)
+    for idx, seq in enumerate(vectorized_data2):
+        length = len(seq)
+        if length >= max_length:
+            length = max_length
+            zero_padding2[idx, :length] = np.array(seq)[:length]
+        else:
+            zero_padding2[idx, :length] = np.array(seq)
+    return zero_padding, zero_padding2
+
+
+def _batch_loader(iterable, n=1):
+    """
+    데이터를 배치 사이즈만큼 잘라서 보내주는 함수입니다. PyTorch의 DataLoader와 같은 역할을 합니다
+    :param iterable: 데이터 list, 혹은 다른 포맷
+    :param n: 배치 사이즈
+    :return:
+    """
+    length = len(iterable)
+    for n_idx in range(0, length, n):
+        yield iterable[n_idx:min(n_idx + n, length)]
+
+#dataset = KinQueryDataset(LOCAL_DATASET_PATH,400)
+
+#for i, (data1,data2, labels) in enumerate(_batch_loader(dataset, 100)):
+#    for i in range(len(labels)):
+#        print(data1[i])
+#        print(data2[i])
+#        print(labels[i])
