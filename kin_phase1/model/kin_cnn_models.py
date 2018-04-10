@@ -1,23 +1,24 @@
-import argparse
-import os
-
-import numpy as np
 import tensorflow as tf
-import nsml
-from nsml import DATASET_PATH, HAS_DATASET, IS_ON_NSML
-from kin_dataset import KinQueryDataset, preprocess
+
 
 def text_cnn_ver_3(_x, _character_size, _embedding_size, model_index,n_classes,keep_prob):
     # specification
-    conv1_filter_shape = [5, 5]
-    conv2_filter_shape = [4, 4]
-    conv3_filter_shape = [3, 3]
-    conv4_filter_shape = [2, 2]
+    conv1_filter_shape = [6, 6]
+    conv2_filter_shape = [5, 5]
+    conv3_filter_shape = [4, 4]
+    conv4_filter_shape = [3, 3]
+    conv5_filter_shape = [2, 2]
+    conv_filters = [
+        [[5,5],40],
+        [[4,4],42],
+        [[3,3],44],
+        [[2,2],46]]
     conv1_filter_num = 32  # kernel size 32
     conv2_filter_num = 32  # kernel size 64
     conv3_filter_num = 32
     conv4_filter_num = 32
-    fully_connect_hidden_layer_size = 128
+    conv5_filter_num = 32
+    fully_connect_hidden_layer_size = 256
 
     # x = [None, 400] data
 
@@ -36,6 +37,17 @@ def text_cnn_ver_3(_x, _character_size, _embedding_size, model_index,n_classes,k
         print(embedded_expand)
 
     # embedeed_expand = [None, 400, 18, 1]
+    conv = embedded_expand
+    for i,shape in enumerate(conv_filters):
+        with tf.name_scope("conv" + str(i+1)):
+            conv = tf.layers.conv2d(conv,shape[1],shape[0],padding="SAME")
+            print(conv)
+        with tf.name_scope("max_pool" + str(i+1)):
+            conv = tf.layers.max_pooling2d(conv,[2,2],[2,2],padding="SAME")
+            print(conv)
+        with tf.name_scope("drop_out" + str(i+1)):
+            conv = tf.nn.dropout(conv,keep_prob=keep_prob)
+    '''
     with tf.name_scope("conv1"):
         conv1 = tf.layers.conv2d(embedded_expand, conv1_filter_num, conv1_filter_shape,padding="SAME")
         print(conv1)
@@ -70,8 +82,15 @@ def text_cnn_ver_3(_x, _character_size, _embedding_size, model_index,n_classes,k
         conv4_max_pooled = tf.layers.max_pooling2d(conv4,[2,2],[2,2],padding="SAME")
         #conv4_max_pooled = tf.nn.dropout(conv4_max_pooled,keep_prob=keep_prob)
 
+    with tf.name_scope("conv5"):
+        conv5 = tf.layers.conv2d(conv4_max_pooled, conv5_filter_num, conv5_filter_shape,padding="SAME")
+
+    with tf.name_scope("max_pool5"):
+        conv5_max_pooled = tf.layers.max_pooling2d(conv5,[2,2],[2,2],padding="SAME")
+    '''
+
     with tf.name_scope("final_hidden"):
-        lh = tf.contrib.layers.flatten(conv4_max_pooled)
+        lh = tf.contrib.layers.flatten(conv)
         lh = tf.layers.dense(lh,fully_connect_hidden_layer_size,activation=tf.nn.relu)
         #lh = tf.nn.dropout(lh, keep_prob=keep_prob)
         print(lh)
@@ -282,12 +301,13 @@ def weight_variable(shape):
 def bias_variable(shape):
     initial = tf.constant(0.1, shape=shape)
     return tf.Variable(initial)
-def textRNNModel(input, n_hidden, n_class,_char_size,_embbed_size,model_index,is_train):
+
+def textRNNModel(input, n_hidden, n_classes,_char_size,_embbed_size,model_index,is_train):
     # Embedding Layer
     # _parm: char_size = 251(default)
     # _parm: config.embedding = 8(default)
     # char_embedding is tf.Variable size[251,8]
-    with tf.name_scope("embedding"):
+    with tf.name_scope("embedding-" + str(model_index)):
         embedding_W = tf.Variable(
             tf.random_uniform([_char_size, _embbed_size], -1.0, 1.0),
             name="Embedding_W" + "-%s" % model_index
@@ -295,19 +315,25 @@ def textRNNModel(input, n_hidden, n_class,_char_size,_embbed_size,model_index,is
 
         # embedded is a embedding neural net which has input as 'char_embedding' & input sentence 'x'
         embedded = tf.nn.embedding_lookup(embedding_W, input)
-        embedded_expand = tf.expand_dims(embedded, -1)
-        embedded_expand = tf.layers.batch_normalization(embedded_expand, training=is_train)
-        print(embedded_expand)
+        #embedded_expand = tf.expand_dims(embedded, -1)
+        #embedded_expand = tf.layers.batch_normalization(embedded_expand, training=is_train)
+        #print(embedded_expand)
 
-    with tf.name_scope("rnn-layer"):
-        cell = tf.nn.rnn_cell.LSTMCell(n_hidden)
-        outputs, states = tf.nn.dynamic_rnn(cell, embedded, dtype=tf.float32)
+    with tf.name_scope("text-rnn-layer-" + str(model_index)):
+        if model_index == 0:
+            cell0 = tf.contrib.rnn.LSTMCell(n_hidden)
+            outputs, states = tf.nn.dynamic_rnn(cell0, embedded, dtype=tf.float32)
+
+        else:
+            cell1 = tf.contrib.rnn.LSTMCell(n_hidden)
+            outputs, states = tf.nn.dynamic_rnn(cell1, embedded, dtype=tf.float32)
+
         outputs = tf.transpose(outputs, [1, 0, 2])
         outputs = outputs[-1]
 
-    with tf.name_scope("Output-layer"):
-        w = tf.Variable(tf.random_normal([n_hidden, n_class]),dtype=tf.float32)
-        b = tf.Variable(tf.random_normal([n_class]),dtype=tf.float32)
-        model = tf.nn.sigmoid(tf.matmul(outputs, w) + b)
+    with tf.name_scope("Output-layer-" + str(model_index)):
+        w = tf.Variable(tf.random_normal([n_hidden, n_classes]),dtype=tf.float32)
+        b = tf.Variable(tf.random_normal([n_classes]),dtype=tf.float32)
+        model = tf.nn.relu(tf.matmul(outputs, w) + b)
 
     return model

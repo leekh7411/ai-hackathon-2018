@@ -29,7 +29,8 @@ import numpy as np
 import tensorflow as tf
 import nsml
 from nsml import DATASET_PATH, HAS_DATASET, IS_ON_NSML
-from kin_dataset import KinQueryDataset, preprocess
+from model.kin_dataset import KinQueryDataset
+
 
 # DONOTCHANGE: They are reserved for nsml
 # This is for nsml leaderboard
@@ -279,9 +280,8 @@ import numpy as np
 import tensorflow as tf
 import nsml
 from nsml import DATASET_PATH, HAS_DATASET, IS_ON_NSML
-from kin_dataset import KinQueryDataset, preprocess
-from kin_cnn_models import text_cnn_ver_2
-from nsml import GPU_NUM
+from model.kin_dataset import KinQueryDataset
+from model.kin_cnn_models import text_cnn_ver_2
 
 
 # DONOTCHANGE: They are reserved for nsml
@@ -684,8 +684,9 @@ import numpy as np
 import tensorflow as tf
 import nsml
 from nsml import DATASET_PATH, HAS_DATASET, IS_ON_NSML
-from kin_dataset import KinQueryDataset, preprocess
-from nsml import GPU_NUM
+from model.kin_dataset import KinQueryDataset
+
+
 # DONOTCHANGE: They are reserved for nsml
 # This is for nsml leaderboard
 def bind_model(sess, config):
@@ -1026,10 +1027,9 @@ import numpy as np
 import tensorflow as tf
 import nsml
 from nsml import DATASET_PATH, HAS_DATASET, IS_ON_NSML
-from kin_dataset import KinQueryDataset, preprocess
-from nsml import GPU_NUM
+from model.kin_dataset import KinQueryDataset, preprocess
 
-from kin_cnn_models import text_cnn_ver_3, text_cnn_ver_2, text_cnn_ver_1
+from model.kin_cnn_models import text_cnn_ver_1
 
 
 # DONOTCHANGE: They are reserved for nsml

@@ -23,8 +23,9 @@ import tensorflow as tf
 import nsml
 from nsml import DATASET_PATH, HAS_DATASET, IS_ON_NSML
 from kin_dataset import KinQueryDataset, preprocess
-from kin_cnn_models import text_cnn_ver_1,text_cnn_ver_2,text_cnn_ver_3,textRNNModel
-from nsml import GPU_NUM
+from kin_cnn_models import text_cnn_ver_3
+
+
 # DONOTCHANGE: They are reserved for nsml
 # This is for nsml leaderboard
 def bind_model(sess, config):
@@ -55,6 +56,11 @@ def bind_model(sess, config):
         """
         # dataset.py에서 작성한 preprocess 함수를 호출하여, 문자열을 벡터로 변환합니다
         preprocessed_data1,preprocessed_data2 = preprocess(raw_data, config.strmaxlen)
+
+        # data normalization
+        preprocessed_data1 = data_normalization(preprocessed_data1)
+        preprocessed_data2 = data_normalization(preprocessed_data2)
+
         # 저장한 모델에 입력값을 넣고 prediction 결과를 리턴받습니다
         pred = sess.run(output, feed_dict={
                                 input1: preprocessed_data1,
@@ -71,6 +77,11 @@ def bind_model(sess, config):
     # nsml에서 지정한 함수에 접근할 수 있도록 하는 함수입니다.
     nsml.bind(save=save, load=load, infer=infer)
 
+def data_normalization(data):
+    if is_data_norm:
+        return ((data - np.mean(data)) / np.std(data))
+    else:
+        return data
 
 def _batch_loader(iterable, n=1):
     """
@@ -103,28 +114,30 @@ if __name__ == '__main__':
 
     # User options
     args.add_argument('--output', type=int, default=1)
-    args.add_argument('--epochs', type=int, default=100)
+    args.add_argument('--epochs', type=int, default=500)
     args.add_argument('--batch', type=int, default=2000)
     args.add_argument('--strmaxlen', type=int, default=400)
     args.add_argument('--embedding', type=int, default=8)
     args.add_argument('--threshold', type=float, default=0.5)
-    args.add_argument('--lr',type=float,default=0.001)
+    args.add_argument('--lr',type=float,default=0.0012)
     config = args.parse_args()
 
     if not HAS_DATASET and not IS_ON_NSML:  # It is not running on nsml
-        DATASET_PATH = './sample_data/kin/'
+        DATASET_PATH = '/home/leekh7411/PycharmProject/ai-hackathon-2018/kin_phase1/sample_data/kin/'
 
     L1_INPUT = config.embedding * config.strmaxlen  # 8 x 400
     FIN_OUTPUT = 1
     learning_rate = config.lr
     learning_rate_tf = tf.placeholder(tf.float32,[],name="lr")
-    train_decay = 0.99
+    train_decay = 0.989
     character_size = 251
     drop_out_val = 0.5
     keep_prob = tf.placeholder(tf.float32)
     is_training = tf.placeholder(tf.bool)
     is_train = True
-    cnn_n_classes = 128
+    is_data_norm = False
+    n_classes = 128
+    rnn_h_num = 128
 
     # Input & Output layer
     # 'x' is sentence input layer(size 400). sentence data is a 400 max_len vector
@@ -143,7 +156,7 @@ if __name__ == '__main__':
         _embedding_size=config.embedding,
         keep_prob=keep_prob,
         model_index=0,
-        n_classes=cnn_n_classes
+        n_classes=n_classes
     )
 
     output2 = text_cnn_ver_3(
@@ -151,14 +164,14 @@ if __name__ == '__main__':
         _character_size=character_size,
         _embedding_size=config.embedding,
         keep_prob=keep_prob,
-        model_index=1,
-        n_classes=cnn_n_classes
+        model_index=0,
+        n_classes=n_classes
     )
     outputs = []
     outputs.append(output1)
     outputs.append(output2)
     output_concat = tf.concat(outputs,1)
-    total_n_classes=  len(outputs) * cnn_n_classes
+    total_n_classes= len(outputs) * n_classes
     output_expand = tf.reshape(output_concat, [-1, total_n_classes])
     output_expand = tf.nn.dropout(output_expand, keep_prob)
 
@@ -179,9 +192,11 @@ if __name__ == '__main__':
     with tf.name_scope("loss-optimizer"):
         binary_cross_entropy = tf.reduce_mean(-(y_ * tf.log(tf.clip_by_value(output,1e-10,1.0))) - (1-y_) * tf.log(tf.clip_by_value(1-output,1e-10,1.0)))
         train_step = tf.train.AdamOptimizer(learning_rate=learning_rate_tf).minimize(binary_cross_entropy)
-        #gvs = optimizer.compute_gradients(binary_cross_entropy)
-        #capped_gvs = [(tf.clip_by_value(grad,1.0,-1.0), var) for grad, var in gvs]
-        #train_step = optimizer.apply_gradients(capped_gvs)
+        '''optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate_tf)
+        gvs = optimizer.compute_gradients(binary_cross_entropy)
+        capped_gvs = [(tf.clip_by_value(grad,1.0,-1.0), var) for grad, var in gvs]
+        train_step = optimizer.apply_gradients(capped_gvs)
+        '''
 
     sess = tf.InteractiveSession()
     tf.global_variables_initializer().run()
@@ -208,11 +223,12 @@ if __name__ == '__main__':
             avg_loss = 0.0
             avg_val_acc = 0.0
             # Data nomalization
-            s = np.random.permutation(dataset.labels.shape[0])
-            dataset.queries1 = dataset.queries1[s]
-            dataset.queries2 = dataset.queries2[s]
-            dataset.labels = dataset.labels[s]
-            #dataset.queries = ((dataset.queries - np.mean(dataset.queries)) / np.std(dataset.queries))
+            #s = np.random.permutation(dataset.labels.shape[0])
+            #dataset.queries1 = dataset.queries1[s]
+            #dataset.queries2 = dataset.queries2[s]
+            #dataset.labels = dataset.labels[s]
+            dataset.queries1 = data_normalization(dataset.queries1)
+            dataset.queries2 = data_normalization(dataset.queries2)
             for i, (data1,data2, labels) in enumerate(_batch_loader(dataset, config.batch)):
                 # Divide Cross Validation Set
                 test_idx = (int)(len(labels) * 0.8)
@@ -224,6 +240,12 @@ if __name__ == '__main__':
 
                 train_labels = labels[:test_idx]
                 test_labels = labels[test_idx:]
+
+                #shuffle
+                s = np.random.permutation(train_labels.shape[0])
+                train1_data = train1_data[s]
+                train2_data = train2_data[s]
+                train_labels = train_labels[s]
 
                 _, loss = sess.run([train_step, binary_cross_entropy],
                                    feed_dict={
