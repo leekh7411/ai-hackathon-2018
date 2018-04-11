@@ -23,8 +23,7 @@ import tensorflow as tf
 import nsml
 from nsml import DATASET_PATH, HAS_DATASET, IS_ON_NSML
 from kin_dataset import KinQueryDataset, preprocess
-from kin_cnn_models import text_cnn_ver_3
-
+from kin_cnn_models import text_clf_model_ver3, text_clf_model_ver2
 
 # DONOTCHANGE: They are reserved for nsml
 # This is for nsml leaderboard
@@ -114,12 +113,12 @@ if __name__ == '__main__':
 
     # User options
     args.add_argument('--output', type=int, default=1)
-    args.add_argument('--epochs', type=int, default=500)
+    args.add_argument('--epochs', type=int, default=100)
     args.add_argument('--batch', type=int, default=2000)
     args.add_argument('--strmaxlen', type=int, default=400)
     args.add_argument('--embedding', type=int, default=8)
     args.add_argument('--threshold', type=float, default=0.5)
-    args.add_argument('--lr',type=float,default=0.0012)
+    args.add_argument('--lr',type=float,default=0.001)
     config = args.parse_args()
 
     if not HAS_DATASET and not IS_ON_NSML:  # It is not running on nsml
@@ -129,13 +128,13 @@ if __name__ == '__main__':
     FIN_OUTPUT = 1
     learning_rate = config.lr
     learning_rate_tf = tf.placeholder(tf.float32,[],name="lr")
-    train_decay = 0.989
+    train_decay = 0.99
     character_size = 251
     drop_out_val = 0.5
     keep_prob = tf.placeholder(tf.float32)
     is_training = tf.placeholder(tf.bool)
     is_train = True
-    is_data_norm = False
+    is_data_norm = True
     n_classes = 128
     rnn_h_num = 128
 
@@ -150,53 +149,24 @@ if __name__ == '__main__':
     # so output size is one(1)
     y_ = tf.placeholder(tf.float32, [None, FIN_OUTPUT], name="output_y")  # 1
 
-    output1 = text_cnn_ver_3(
-        _x=input1,
-        _character_size=character_size,
-        _embedding_size=config.embedding,
-        keep_prob=keep_prob,
-        model_index=0,
-        n_classes=n_classes
-    )
 
-    output2 = text_cnn_ver_3(
-        _x=input2,
-        _character_size=character_size,
-        _embedding_size=config.embedding,
-        keep_prob=keep_prob,
-        model_index=0,
-        n_classes=n_classes
+    output = text_clf_model_ver2(
+        input1 = input1,
+        input2 = input2,
+        char_size = character_size,
+        embedding_size= config.embedding,
+        is_train=is_train,
+        keep_prob= keep_prob
     )
-    outputs = []
-    outputs.append(output1)
-    outputs.append(output2)
-    output_concat = tf.concat(outputs,1)
-    total_n_classes= len(outputs) * n_classes
-    output_expand = tf.reshape(output_concat, [-1, total_n_classes])
-    output_expand = tf.nn.dropout(output_expand, keep_prob)
-
-    # Output layer
-    with tf.name_scope("final-output-layer"):
-        '''W_Fin = tf.get_variable(
-            "W-final-out",
-            shape=[total_n_classes, FIN_OUTPUT],
-            initializer=tf.contrib.layers.xavier_initializer()
-        )'''
-        W_Fin = weight_variable([total_n_classes,FIN_OUTPUT])
-        #B_Fin = tf.Variable(tf.constant(0.1, shape=[FIN_OUTPUT]), name="B-final-out")
-        B_Fin = bias_variable([FIN_OUTPUT])
-        output = tf.nn.sigmoid(tf.matmul(output_expand, W_Fin) + B_Fin)
-        print(output)
 
     # loss와 optimizer
-    with tf.name_scope("loss-optimizer"):
-        binary_cross_entropy = tf.reduce_mean(-(y_ * tf.log(tf.clip_by_value(output,1e-10,1.0))) - (1-y_) * tf.log(tf.clip_by_value(1-output,1e-10,1.0)))
-        train_step = tf.train.AdamOptimizer(learning_rate=learning_rate_tf).minimize(binary_cross_entropy)
-        '''optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate_tf)
-        gvs = optimizer.compute_gradients(binary_cross_entropy)
-        capped_gvs = [(tf.clip_by_value(grad,1.0,-1.0), var) for grad, var in gvs]
-        train_step = optimizer.apply_gradients(capped_gvs)
-        '''
+    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    with tf.control_dependencies(update_ops):
+        # Ensures that we execute the update_ops before performing the train_step
+        with tf.name_scope("loss-optimizer"):
+            binary_cross_entropy = tf.reduce_mean(-(y_ * tf.log(tf.clip_by_value(output,1e-10,1.0))) - (1-y_) * tf.log(tf.clip_by_value(1-output,1e-10,1.0)))
+            train_step = tf.train.AdamOptimizer(learning_rate=0.001).minimize(binary_cross_entropy)
+
 
     sess = tf.InteractiveSession()
     tf.global_variables_initializer().run()
@@ -222,11 +192,8 @@ if __name__ == '__main__':
         for epoch in range(config.epochs):
             avg_loss = 0.0
             avg_val_acc = 0.0
-            # Data nomalization
-            #s = np.random.permutation(dataset.labels.shape[0])
-            #dataset.queries1 = dataset.queries1[s]
-            #dataset.queries2 = dataset.queries2[s]
-            #dataset.labels = dataset.labels[s]
+            avg_val_loss = 0.0
+
             dataset.queries1 = data_normalization(dataset.queries1)
             dataset.queries2 = data_normalization(dataset.queries2)
             for i, (data1,data2, labels) in enumerate(_batch_loader(dataset, config.batch)):
@@ -280,16 +247,17 @@ if __name__ == '__main__':
 
                 print('Batch : ', i + 1, '/', one_batch_size, ', Batch Size:', one_batch_size ,
                       ', BCE in this minibatch: ', float(loss),
-                      " Valid score:", float(val_acc) * 100,
-                      " Valid loss :", float(val_loss))
+                      " Valid loss :", float(val_loss),
+                      " Valid score:", float(val_acc) * 100)
                 avg_loss += float((loss))
                 avg_val_acc += float((val_acc))
+                avg_val_loss += float(val_loss)
 
-            print('epoch:', epoch, ' train_loss:', float(avg_loss / (one_batch_size)), ' valid_acc:',
+            print('epoch:', epoch, ' train_loss:', float(avg_loss / (one_batch_size)),' valid_loss:',float(avg_val_loss/(one_batch_size)) ,' valid_acc:',
                   float(avg_val_acc / (one_batch_size)) * 100)
 
             nsml.report(summary=True, scope=locals(), epoch=epoch, epoch_total=config.epochs,
-                        train__loss=float(avg_loss/one_batch_size), step=epoch, valid_acc=float(avg_val_acc / (one_batch_size)) * 100)
+                        train__loss=float(avg_loss/one_batch_size), step=epoch, val_loss=float(avg_val_loss / (one_batch_size)))
             learning_rate = learning_rate * train_decay
 
             # DONOTCHANGE (You can decide how often you want to save the model)
