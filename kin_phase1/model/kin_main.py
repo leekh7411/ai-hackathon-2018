@@ -15,15 +15,16 @@ CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFT
 OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
-
 import argparse
 import os
 import numpy as np
 import tensorflow as tf
 import nsml
 from nsml import DATASET_PATH, HAS_DATASET, IS_ON_NSML
-from kin_dataset import KinQueryDataset, preprocess
-from kin_cnn_models import text_clf_model_ver3, text_clf_model_ver2
+from kin_dataset import KinQueryDataset, preprocess,preprocess2,data_augmentation,preprocess_origin
+from kin_model import text_clf_ensemble_model
+from nsml import GPU_NUM
+
 
 # DONOTCHANGE: They are reserved for nsml
 # This is for nsml leaderboard
@@ -54,23 +55,27 @@ def bind_model(sess, config):
         :return:
         """
         # dataset.py에서 작성한 preprocess 함수를 호출하여, 문자열을 벡터로 변환합니다
-        preprocessed_data1,preprocessed_data2 = preprocess(raw_data, config.strmaxlen)
-
-        # data normalization
-        preprocessed_data1 = data_normalization(preprocessed_data1)
-        preprocessed_data2 = data_normalization(preprocessed_data2)
+        preprocessed_data1, preprocessed_data2 = preprocess2(raw_data, config.strmaxlen,test_data=False)
+        #preprocessed_data = preprocess_origin(raw_data, config.strmaxlen,test_data=False)
 
         # 저장한 모델에 입력값을 넣고 prediction 결과를 리턴받습니다
-        pred = sess.run(output, feed_dict={
-                                input1: preprocessed_data1,
-                                input2: preprocessed_data2,
-                                is_training: False,
-                                keep_prob:1})
+        infer_preds = []
+        for output in outputs:
+            infer_preds.append(sess.run(output, feed_dict={
+                                    input1: preprocessed_data1,
+                                    input2: preprocessed_data2,
+                                    is_training: False,
+                                    keep_prob:1}))
 
-        clipped = np.array(pred > config.threshold, dtype=np.int)
+        infer_pred = tf.concat(infer_preds, axis=1)
+        infer_pred = tf.reduce_mean(infer_pred, axis=1, keep_dims=True)
+        infer_pred = sess.run(infer_pred)
+        clipped = np.array((infer_pred) > config.threshold, dtype=np.int)
+
+        # clipped = np.array(infer_pred > config.threshold, dtype=np.int)
         # DONOTCHANGE: They are reserved for nsml
         # 리턴 결과는 [(확률, 0 or 1)] 의 형태로 보내야만 리더보드에 올릴 수 있습니다. 리더보드 결과에 확률의 값은 영향을 미치지 않습니다
-        return list(zip(pred.flatten(), clipped.flatten()))
+        return list(zip(infer_pred.flatten(), clipped.flatten()))
 
     # DONOTCHANGE: They are reserved for nsml
     # nsml에서 지정한 함수에 접근할 수 있도록 하는 함수입니다.
@@ -105,175 +110,201 @@ def bias_variable(shape):
 
 
 if __name__ == '__main__':
-    args = argparse.ArgumentParser()
-    # DONOTCHANGE: They are reserved for nsml
-    args.add_argument('--mode', type=str, default='train')
-    args.add_argument('--pause', type=int, default=0)
-    args.add_argument('--iteration', type=str, default='0')
+    #if GPU_NUM:
+    #    config_proto = tf.ConfigProto()
+    #    config_proto.gpu_options.allow_growth = True
 
-    # User options
-    args.add_argument('--output', type=int, default=1)
-    args.add_argument('--epochs', type=int, default=100)
-    args.add_argument('--batch', type=int, default=2000)
-    args.add_argument('--strmaxlen', type=int, default=400)
-    args.add_argument('--embedding', type=int, default=8)
-    args.add_argument('--threshold', type=float, default=0.5)
-    args.add_argument('--lr',type=float,default=0.001)
-    config = args.parse_args()
+        args = argparse.ArgumentParser()
+        # DONOTCHANGE: They are reserved for nsml
+        args.add_argument('--mode', type=str, default='train')
+        args.add_argument('--pause', type=int, default=0)
+        args.add_argument('--iteration', type=str, default='0')
 
-    if not HAS_DATASET and not IS_ON_NSML:  # It is not running on nsml
-        DATASET_PATH = '/home/leekh7411/PycharmProject/ai-hackathon-2018/kin_phase1/sample_data/kin/'
+        # User options
+        args.add_argument('--output', type=int, default=1)
+        args.add_argument('--epochs', type=int, default=200)
+        args.add_argument('--batch', type=int, default=2000)
+        args.add_argument('--strmaxlen', type=int, default=400)
+        args.add_argument('--w2v_size',type=int, default=16)
+        args.add_argument('--embedding', type=int, default=8) # more bigger?
+        args.add_argument('--threshold', type=float, default=0.5)
+        args.add_argument('--lr',type=float,default=0.0005)
+        config = args.parse_args()
 
-    L1_INPUT = config.embedding * config.strmaxlen  # 8 x 400
-    FIN_OUTPUT = 1
-    learning_rate = config.lr
-    learning_rate_tf = tf.placeholder(tf.float32,[],name="lr")
-    train_decay = 0.99
-    character_size = 251
-    drop_out_val = 0.5
-    keep_prob = tf.placeholder(tf.float32)
-    is_training = tf.placeholder(tf.bool)
-    is_train = True
-    is_data_norm = True
-    n_classes = 128
-    rnn_h_num = 128
+        if not HAS_DATASET and not IS_ON_NSML:  # It is not running on nsml
+            # This path have to be changed!
+            DATASET_PATH = '/home/leekh7411/PycharmProject/ai-hackathon-2018/kin_phase1/sample_data/kin/'
 
-    # Input & Output layer
-    # 'x' is sentence input layer(size 400). sentence data is a 400 max_len vector
-    # and char2vec model return 'int32' vector
-    input1 = tf.placeholder(tf.int32, [None, config.strmaxlen], name="input1_x")  # 400
-    input2 = tf.placeholder(tf.int32, [None, config.strmaxlen], name="input2_x")
+        # Parameters for model configuration
+        L1_INPUT = config.embedding * config.strmaxlen  # 8 x 400
+        FIN_OUTPUT = 1
+        learning_rate = config.lr
+        learning_rate_tf = tf.placeholder(tf.float32,[],name="lr")
+        train_decay = 0.99
+        character_size = 251
+        w2v_size = config.w2v_size
+        drop_out_val = 0.8
+        keep_prob = tf.placeholder(tf.float32)
+        is_training = tf.placeholder(tf.bool)
+        is_train = True
+        is_data_norm = False
+        n_classes = 32
+        beta = 0.1
 
-    # 'y' is output layer.
-    # we will classify as binary (0 or 1)
-    # so output size is one(1)
-    y_ = tf.placeholder(tf.float32, [None, FIN_OUTPUT], name="output_y")  # 1
+        # Input & Output layer
+        input1 = tf.placeholder(tf.int32, [None, config.strmaxlen], name="input-x1")
+        input2 = tf.placeholder(tf.int32, [None, config.strmaxlen], name="input-x2")
+        y_ = tf.placeholder(tf.float32, [None, FIN_OUTPUT], name="output-y")
 
 
-    output = text_clf_model_ver2(
-        input1 = input1,
-        input2 = input2,
-        char_size = character_size,
-        embedding_size= config.embedding,
-        is_train=is_train,
-        keep_prob= keep_prob
-    )
+        # Add models for ensemble prediction
+        outputs = []
+        ensemble_size = 10
+        for i in range(ensemble_size):
+            outputs.append(text_clf_ensemble_model(input1, input2, character_size, config.embedding, is_train, keep_prob, n_classes,i))
 
-    # loss와 optimizer
-    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    with tf.control_dependencies(update_ops):
-        # Ensures that we execute the update_ops before performing the train_step
+
+        # Make each model's loss and optimizer(train_step)
         with tf.name_scope("loss-optimizer"):
-            binary_cross_entropy = tf.reduce_mean(-(y_ * tf.log(tf.clip_by_value(output,1e-10,1.0))) - (1-y_) * tf.log(tf.clip_by_value(1-output,1e-10,1.0)))
-            train_step = tf.train.AdamOptimizer(learning_rate=0.001).minimize(binary_cross_entropy)
+            # Binary Cross Entropy
+            def binary_cross_entropy_loss(y_,output):
+                return tf.reduce_mean(-(y_ * tf.log(tf.clip_by_value(output, 1e-10, 1.0))) - (1 - y_) * tf.log(tf.clip_by_value(1 - output, 1e-10, 1.0)))
+
+            bce_loss = []
+            for out in outputs:
+                bce_loss.append(binary_cross_entropy_loss(y_,out))
+
+            train_steps = []
+            for loss in bce_loss:
+                train_steps.append(tf.train.AdamOptimizer(learning_rate=learning_rate_tf).minimize(loss))
+
+        sess = tf.InteractiveSession()
+        tf.global_variables_initializer().run()
+
+        # ========================================================================================#
+
+        # DONOTCHANGE: Reserved for nsml
+        bind_model(sess=sess, config=config)
 
 
-    sess = tf.InteractiveSession()
-    tf.global_variables_initializer().run()
+        # DONOTCHANGE: Reserved for nsml
+        if config.pause:
+            nsml.paused(scope=locals())
 
-    # ========================================================================================#
+        if config.mode == 'train':
+            # 데이터를 로드합니다.
+            dataset = KinQueryDataset(DATASET_PATH, config.strmaxlen)
+            dataset_len = len(dataset)
+            one_batch_size = dataset_len//config.batch
+            if dataset_len % config.batch != 0:
+                one_batch_size += 1
+            # epoch마다 학습을 수행합니다.
+            for epoch in range(config.epochs):
+                avg_loss = 0.0
+                avg_val_acc = 0.0
 
-    # DONOTCHANGE: Reserved for nsml
-    bind_model(sess=sess, config=config)
+                # Shuffle train data to prevent overfitting
+                s = np.random.permutation(dataset.labels.shape[0])
+                dataset.queries1 = dataset.queries1[s]
+                dataset.queries2 = dataset.queries2[s]
+                dataset.labels = dataset.labels[s]
+
+                #test_data1 = dataset.queries1_test
+                #test_data2 = dataset.queries2_test
+                #test_labels = dataset.labels_test
+
+                for i, (data1,data2,labels) in enumerate(_batch_loader(dataset, config.batch)):
+
+                    # Divide Cross Validation Set
+                    # *This validation is meaningless! because of all data will be shuffled
+                    test_idx = (int)(len(labels) * 0.95)
+                    train_data1 = data1[:test_idx]
+                    train_data2 = data2[:test_idx]
+                    test_data1 = data1[test_idx:]
+                    test_data2 = data2[test_idx:]
+                    train_labels = labels[:test_idx]
+                    test_labels = labels[test_idx:]
 
 
-    # DONOTCHANGE: Reserved for nsml
-    if config.pause:
-        nsml.paused(scope=locals())
+                    # Test Validation Set
+                    # For ensemble, test each models
+                    def predict(output,test_data1,test_data2,is_train,_keep_prob):
+                        pred = sess.run(output, feed_dict={input1: test_data1,input2: test_data2,
+                                                        is_training: is_train, keep_prob: _keep_prob})
+                        pred_clipped = np.array(pred > config.threshold, dtype=np.float32)
+                        return pred_clipped
 
-    if config.mode == 'train':
-        # 데이터를 로드합니다.
-        dataset = KinQueryDataset(DATASET_PATH, config.strmaxlen)
-        dataset_len = len(dataset)
-        one_batch_size = dataset_len//config.batch
-        if dataset_len % config.batch != 0:
-            one_batch_size += 1
-        # epoch마다 학습을 수행합니다.
-        for epoch in range(config.epochs):
-            avg_loss = 0.0
-            avg_val_acc = 0.0
-            avg_val_loss = 0.0
+                    preds = []
+                    for out in outputs:
+                        preds.append(predict(out, test_data1, test_data2, False, 1))
 
-            dataset.queries1 = data_normalization(dataset.queries1)
-            dataset.queries2 = data_normalization(dataset.queries2)
-            for i, (data1,data2, labels) in enumerate(_batch_loader(dataset, config.batch)):
-                # Divide Cross Validation Set
-                test_idx = (int)(len(labels) * 0.8)
-                train1_data = data1[:test_idx]
-                train2_data = data2[:test_idx]
+                    # concat all predicted results([0.,1.,0.,1.,..],[1.,0.,1.,...],...) <- float data
+                    pred = tf.concat(preds,axis=1)
 
-                test_data1 = data1[test_idx:]
-                test_data2 = data2[test_idx:]
+                    # sum and mean all row data
+                    pred = tf.reduce_mean(pred,axis=1,keep_dims=True)
 
-                train_labels = labels[:test_idx]
-                test_labels = labels[test_idx:]
+                    # if five models result's is 0.8
+                    # --> [1,1,1,1,0] --> sum(4) --> mean(4/5) --> 0.8 --> threshold(0.5) --> 1
+                    # ensemble's result is '1'
+                    pred = np.array(sess.run(pred) > config.threshold, dtype=np.int)
+                    is_correct = tf.equal(pred, test_labels)
+                    accuracy = tf.reduce_mean(tf.cast(is_correct, tf.float32))
 
-                #shuffle
-                s = np.random.permutation(train_labels.shape[0])
-                train1_data = train1_data[s]
-                train2_data = train2_data[s]
-                train_labels = train_labels[s]
+                    # Get Validation Loss
+                    val_acc = accuracy.eval(
+                        feed_dict={
+                                   input1: test_data1,input2: test_data2,
+                                   y_: test_labels,
+                                   is_training: False,
+                                   keep_prob: 1})
 
-                _, loss = sess.run([train_step, binary_cross_entropy],
-                                   feed_dict={
-                                       input1: train1_data,
-                                       input2: train2_data,
-                                       y_: train_labels,
-                                       learning_rate_tf: learning_rate,
-                                       is_training: True,
-                                       keep_prob: drop_out_val
-                                   })
 
-                # Test Validation Set
-                pred = sess.run(output, feed_dict={input1: test_data1,input2: test_data2,y_:test_labels ,is_training: False, keep_prob:1})
-                pred_clipped = np.array(pred > config.threshold, dtype=np.int)
-                is_correct = tf.equal(pred_clipped, test_labels)
-                accuracy = tf.reduce_mean(tf.cast(is_correct, tf.float32))
 
-                # Get Validation Loss
-                val_acc = accuracy.eval(
-                    feed_dict={input1: test_data1,
-                               input2: test_data2,
-                               y_: test_labels,
-                               is_training: False,
-                               keep_prob:1})
+                    # Training Section
+                    ensemble_loss = 0.
+                    for train, bce in zip(train_steps,bce_loss):
+                        _, loss = sess.run([train, bce],
+                                           feed_dict={
+                                               input1: data1,input2: data2,
+                                               y_: labels,
+                                               learning_rate_tf: learning_rate,
+                                               is_training: True,
+                                               keep_prob: drop_out_val
+                                           })
+                        ensemble_loss += loss
+                    ensemble_loss /= len(bce_loss)
 
-                val_loss = sess.run(binary_cross_entropy,
-                                    feed_dict={input1: test_data1,
-                                               input2: test_data2,
-                                               y_:test_labels,
-                                               is_training: False,
-                                               keep_prob:1})
+                    nsml.report(summary=True, scope=locals(), epoch=epoch * one_batch_size + i, epoch_total=config.epochs * one_batch_size,
+                                train__loss=float(ensemble_loss), step=epoch * one_batch_size + i)
 
-                print('Batch : ', i + 1, '/', one_batch_size, ', Batch Size:', one_batch_size ,
-                      ', BCE in this minibatch: ', float(loss),
-                      " Valid loss :", float(val_loss),
-                      " Valid score:", float(val_acc) * 100)
-                avg_loss += float((loss))
-                avg_val_acc += float((val_acc))
-                avg_val_loss += float(val_loss)
+                    print('Batch : ', i + 1, '/', one_batch_size, ', Batch Size:', one_batch_size ,
+                          'BCE in this minibatch: ', float(ensemble_loss),
+                          "Valid score:", float(val_acc) * 100,
+                          "Learning_rate:", (learning_rate))
+                    avg_loss += float((ensemble_loss))
+                    avg_val_acc += float((val_acc))
+                print('========================================================================================')
+                print('epoch:', epoch, '\ntrain_loss:', float(avg_loss / (one_batch_size)),'\nvalid_acc:',
+                      float(avg_val_acc / (one_batch_size)) * 100)
 
-            print('epoch:', epoch, ' train_loss:', float(avg_loss / (one_batch_size)),' valid_loss:',float(avg_val_loss/(one_batch_size)) ,' valid_acc:',
-                  float(avg_val_acc / (one_batch_size)) * 100)
 
-            nsml.report(summary=True, scope=locals(), epoch=epoch, epoch_total=config.epochs,
-                        train__loss=float(avg_loss/one_batch_size), step=epoch, val_loss=float(avg_val_loss / (one_batch_size)))
-            learning_rate = learning_rate * train_decay
+                learning_rate = learning_rate * train_decay
 
-            # DONOTCHANGE (You can decide how often you want to save the model)
-            nsml.save(epoch)
+                # DONOTCHANGE (You can decide how often you want to save the model)
+                nsml.save(epoch)
 
-    # 로컬 테스트 모드일때 사용합니다
-    # 결과가 아래와 같이 나온다면, nsml submit을 통해서 제출할 수 있습니다.
-    # [(0.3, 0), (0.7, 1), ... ]
-    else:
-        with open(os.path.join(DATASET_PATH, 'train/train_data'), 'rt', encoding='utf-8') as f:
-            queries = f.readlines()
-        res = []
-        for batch in _batch_loader(queries, config.batch):
-            temp_res = nsml.infer(batch)
-            res += temp_res
-        print(res)
+        # 로컬 테스트 모드일때 사용합니다
+        # 결과가 아래와 같이 나온다면, nsml submit을 통해서 제출할 수 있습니다.
+        # [(0.3, 0), (0.7, 1), ... ]
+        else:
+            with open(os.path.join(DATASET_PATH, 'train/train_data'), 'rt', encoding='utf-8') as f:
+                queries = f.readlines()
+            res = []
+            for batch in _batch_loader(queries, config.batch):
+                temp_res = nsml.infer(batch)
+                res += temp_res
+            print(res)
 
 
 

@@ -24,5 +24,5 @@ setup(
     name='nsml LSTM kin query',
     version='1.0',
     description='',
-    install_requires = ['h5py','keras']
+    install_requires = ['h5py','keras','gensim','psutil']
 )
